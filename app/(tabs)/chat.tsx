@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import {
   View,
   Text,
@@ -8,10 +8,18 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Modal,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { chatCompletion } from '../../services/api'
-import { loadSettings, loadProfile, saveChat } from '../../services/storage'
+import {
+  loadSettings,
+  loadProfile,
+  saveChat,
+  loadAllChats,
+  loadActiveConvId,
+  saveActiveConvId,
+} from '../../services/storage'
 import type { Message, Conversation } from '../../reference/types'
 
 const COLORS = {
@@ -29,20 +37,67 @@ const COLORS = {
 let idCounter = 0
 const genId = () => `msg_${Date.now()}_${++idCounter}`
 
+const WELCOME_MSG: Message = {
+  id: 'welcome',
+  role: 'assistant',
+  content: '¡Hola! Soy tu asistente de carrera. Puedo ayudarte con tu CV, preparar entrevistas, o responder preguntas sobre tu búsqueda laboral.',
+  timestamp: Date.now(),
+}
+
+const newConversation = (): Conversation => ({
+  id: `conv_${Date.now()}`,
+  title: 'Nueva conversación',
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+  archived: false,
+  messages: [WELCOME_MSG],
+})
+
 export default function ChatScreen() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      role: 'assistant',
-      content: '¡Hola! Soy tu asistente de carrera. Puedo ayudarte con tu CV, preparar entrevistas, o responder preguntas sobre tu búsqueda laboral.',
-      timestamp: Date.now(),
-    },
-  ])
+  const [conversation, setConversation] = useState<Conversation>(newConversation)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
-  const [conversationId] = useState(() => `conv_${Date.now()}`)
+  const [modalVisible, setModalVisible] = useState(false)
+  const [conversations, setConversations] = useState<Conversation[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const flatListRef = useRef<FlatList>(null)
+
+  const messages = conversation.messages
+
+  useEffect(() => {
+    ;(async () => {
+      const activeId = await loadActiveConvId()
+      if (activeId) {
+        const saved = await loadAllChats()
+        const active = saved.find((c) => c.id === activeId)
+        if (active) setConversation(active)
+      }
+    })()
+  }, [])
+
+  const refreshConversations = useCallback(async () => {
+    setConversations(await loadAllChats())
+  }, [])
+
+  const switchConversation = useCallback(async (conv: Conversation) => {
+    setConversation(conv)
+    await saveActiveConvId(conv.id)
+    setModalVisible(false)
+  }, [])
+
+  const createNew = useCallback(async () => {
+    const conv = newConversation()
+    setConversation(conv)
+    await saveActiveConvId(conv.id)
+    setModalVisible(false)
+  }, [])
+
+  const setMessages = (updater: Message[] | ((prev: Message[]) => Message[])) => {
+    setConversation((prev) => ({
+      ...prev,
+      messages: typeof updater === 'function' ? updater(prev.messages) : updater,
+    }))
+  }
 
   const appendMessage = (msg: Message) => {
     setMessages((prev) => [...prev, msg])
@@ -116,15 +171,14 @@ export default function ChatScreen() {
         abortRef.current.signal,
       )
 
-      const conv: Conversation = {
-        id: conversationId,
-        title: userMsg.content.slice(0, 50),
-        createdAt: Date.now(),
+      const updated: Conversation = {
+        ...conversation,
+        title: conversation.messages.length <= 1 ? userMsg.content.slice(0, 50) : conversation.title,
         updatedAt: Date.now(),
-        archived: false,
         messages: [...messages, userMsg, { ...assistantMsg, content: fullContent }],
       }
-      await saveChat(conv)
+      setConversation(updated)
+      await saveChat(updated)
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         updateLastMessage('Error al conectar con el servidor. Verifica la configuración en Ajustes.')
@@ -171,8 +225,27 @@ export default function ChatScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={90}
     >
-      <View style={{ paddingTop: 60, paddingHorizontal: 20, paddingBottom: 8 }}>
-        <Text style={{ color: COLORS.text, fontSize: 28, fontWeight: '700' }}>Chat</Text>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingTop: 60,
+          paddingHorizontal: 20,
+          paddingBottom: 8,
+        }}
+      >
+        <TouchableOpacity onPress={() => { refreshConversations(); setModalVisible(true) }} style={{ flexShrink: 1 }}>
+          <Text
+            style={{ color: COLORS.text, fontSize: 28, fontWeight: '700' }}
+            numberOfLines={1}
+          >
+            {conversation.title}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={createNew} style={{ marginLeft: 12 }}>
+          <Ionicons name="add-circle" size={28} color={COLORS.accent} />
+        </TouchableOpacity>
       </View>
 
       <FlatList
@@ -249,6 +322,64 @@ export default function ChatScreen() {
           </TouchableOpacity>
         )}
       </View>
+
+      <Modal visible={modalVisible} transparent animationType="slide" onRequestClose={() => setModalVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: COLORS.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '60%', paddingBottom: 40 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: COLORS.border }}>
+              <Text style={{ color: COLORS.text, fontSize: 18, fontWeight: '600' }}>Conversaciones</Text>
+              <TouchableOpacity onPress={() => setModalVisible(false)}>
+                <Ionicons name="close" size={24} color={COLORS.muted} />
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={conversations}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  onPress={() => switchConversation(item)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    padding: 16,
+                    borderBottomWidth: 1,
+                    borderBottomColor: COLORS.border,
+                    backgroundColor: item.id === conversation.id ? COLORS.card : 'transparent',
+                  }}
+                >
+                  <Ionicons name="chatbubble-ellipses" size={20} color={COLORS.muted} style={{ marginRight: 12 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: COLORS.text, fontSize: 15, fontWeight: '500' }} numberOfLines={1}>
+                      {item.title}
+                    </Text>
+                    <Text style={{ color: COLORS.muted, fontSize: 12, marginTop: 2 }}>
+                      {new Date(item.createdAt).toLocaleDateString('es', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  </View>
+                  {item.id === conversation.id && (
+                    <Ionicons name="checkmark-circle" size={20} color={COLORS.accent} />
+                  )}
+                </TouchableOpacity>
+              )}
+              style={{ maxHeight: 400 }}
+            />
+            <TouchableOpacity
+              onPress={createNew}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 16,
+                borderTopWidth: 1,
+                borderTopColor: COLORS.border,
+              }}
+            >
+              <Ionicons name="add" size={20} color={COLORS.accent} style={{ marginRight: 8 }} />
+              <Text style={{ color: COLORS.accent, fontSize: 15, fontWeight: '600' }}>Nueva conversación</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   )
 }

@@ -37,6 +37,13 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="roadmap"
+        options={{
+          title: 'Roadmap',
+          tabBarIcon: ({ color, size }) => <Ionicons name="compass" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="cv"
         options={{
           title: 'CV',

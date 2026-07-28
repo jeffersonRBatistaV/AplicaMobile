@@ -6,6 +6,15 @@ const KEYS = {
   chats: '@aplica/chats',
   settings: '@aplica/settings',
   jobs: '@aplica/jobs',
+  activeConvId: '@aplica/activeConvId',
+}
+
+export async function saveActiveConvId(id: string): Promise<void> {
+  await AsyncStorage.setItem(KEYS.activeConvId, id)
+}
+
+export async function loadActiveConvId(): Promise<string | null> {
+  return AsyncStorage.getItem(KEYS.activeConvId)
 }
 
 export async function saveProfile(profile: Profile): Promise<void> {
@@ -58,3 +67,18 @@ export async function loadJobs(): Promise<JobApplication[]> {
   const data = await AsyncStorage.getItem(KEYS.jobs)
   return data ? JSON.parse(data) : []
 }
+
+export const saveRoadmap = async (roadmap) => {
+  try {
+    const existing = await loadRoadmaps();
+    existing.push(roadmap);
+    await AsyncStorage.setItem("@roadmaps", JSON.stringify(existing));
+  } catch (e) { console.error(e); }
+};
+
+export const loadRoadmaps = async () => {
+  try {
+    const data = await AsyncStorage.getItem("@roadmaps");
+    return data ? JSON.parse(data) : [];
+  } catch (e) { return []; }
+};
